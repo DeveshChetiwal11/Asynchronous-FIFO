@@ -1,68 +1,81 @@
-module Async_FIFO(
-    input clk_r, clk_w, rstn, wr_en, rd_en,
-    input [7:0] buf_in,
-    output reg [7:0] buf_out,
-    output reg buf_empty, buf_full
-);
+module Async_FIFO #(
+parameter ADDR_WIDTH = 4,
+parameter DATA_WIDTH = 8
+)(
+input rd_clk,wr_clk,rst,wr_en,rd_en,
+input [DATA_WIDTH-1:0] wr_data,
+output [DATA_WIDTH-1:0] rd_data,
+output full,empty);
 
-    reg [3:0] rd_ptr, wr_ptr; // Pointers for read and write
-    reg [7:0] buf_mem[63:0];  // FIFO memory
+localparam DEPTH = (1 << ADDR_WIDTH);
 
-    // Separate counters for read and write domains
-    reg [7:0] wr_counter; // Counter for write domain
-    reg [7:0] rd_counter; // Counter for read domain
+//FIFO Memory
+reg [DATA_WIDTH-1:0] mem [DEPTH-1:0];
 
-    // Synchronized versions of counters for cross-clock domain
-    reg [7:0] wr_counter_sync; // Synchronized write counter in read domain
-    reg [7:0] rd_counter_sync; // Synchronized read counter in write domain
+// Binary and Gray code pointers
+reg [ADDR_WIDTH-1:0] rd_ptr_bin,rd_ptr_gray;
+reg [ADDR_WIDTH-1:0] wr_ptr_bin,wr_ptr_gray;
 
-    // Combinational logic for empty and full flags
-    always @(*) begin
-        buf_empty = (wr_counter_sync == rd_counter);
-        buf_full  = (wr_counter - rd_counter_sync == 64);
+// Synchronized pointers
+reg [ADDR_WIDTH-1:0] rd_ptr_gray_sync1,rd_ptr_gray_sync2;
+reg [ADDR_WIDTH-1:0] wr_ptr_gray_sync1,wr_ptr_gray_sync2;
+
+//Write Logic
+always @(posedge wr_clk or posedge rst) begin
+    if(rst) begin
+    wr_ptr_bin <= 0;
+    wr_ptr_gray <= 0;
     end
-
-    // Write logic
-    always @(posedge clk_w or negedge rstn) begin
-        if (!rstn) begin
-            wr_ptr <= 0;
-            wr_counter <= 0;
-        end else if (!buf_full && wr_en) begin
-            buf_mem[wr_ptr] <= buf_in;
-            wr_ptr <= wr_ptr + 1;
-            wr_counter <= wr_counter + 1;
-        end
+    else if(wr_en && !full) begin
+    mem[wr_ptr_bin[ADDR_WIDTH-1:0]] <= wr_data;
+    wr_ptr_bin <= wr_ptr_bin + 1;
+    wr_ptr_gray <= (wr_ptr_bin+1) ^ ((wr_ptr_bin+1)>>1);
     end
+end
 
-    // Read logic
-    always @(posedge clk_r or negedge rstn) begin
-        if (!rstn) begin
-            rd_ptr <= 0;
-            rd_counter <= 0;
-            buf_out <= 0;
-        end else if (!buf_empty && rd_en) begin
-            buf_out <= buf_mem[rd_ptr];
-            rd_ptr <= rd_ptr + 1;
-            rd_counter <= rd_counter + 1;
-        end
+//Read Logic
+always @(posedge rd_clk or posedge rst) begin
+    if(rst) begin
+    rd_ptr_bin <= 0;
+    rd_ptr_gray <= 0;
     end
-
-    // Synchronize wr_counter to read domain
-    always @(posedge clk_r or negedge rstn) begin
-        if (!rstn) begin
-            wr_counter_sync <= 0;
-        end else begin
-            wr_counter_sync <= wr_counter;
-        end
+    else if(rd_en && !empty) begin
+    rd_data <= mem[rd_ptr_bin[ADDR_WIDTH-1:0]];
+    rd_ptr_bin <= rd_ptr_bin + 1;
+    rd_ptr_gray <= (rd_ptr_bin +1) ^ ((rd_ptr_bin +1)>>1);
     end
+end
 
-    // Synchronize rd_counter to write domain
-    always @(posedge clk_w or negedge rstn) begin
-        if (!rstn) begin
-            rd_counter_sync <= 0;
-        end else begin
-            rd_counter_sync <= rd_counter;
-        end
+// Synchronize read pointers to write clock domain
+always @(posedge wr_clk or posedge rst) begin
+    if(rst) begin
+    rd_ptr_gray_sync1 <= 0;
+    rd_ptr_gray_sync2 <= 0;
     end
+    else begin
+    rd_ptr_gray_sync1 <= rd_ptr_gray;
+    rd_ptr_gray_sync2 <= rd_ptr_gray_sync1;
+    end
+end
 
+// Synchronize write pointers to ead clock domain
+always @(posedge rd_clk or posedge rst) begin
+    if(rst) begin
+    wr_ptr_gray_sync1 <= 0;
+    wr_ptr_gray_sync2 <= 0;
+    end
+    else begin
+    wr_ptr_gray_sync1 <= wr_ptr_gray;
+    wr_ptr_gray_sync2 <= wr_ptr_gray_sync1;
+    end
+end
+
+// Full condition logic
+assign full = (wr_ptr_gray == {~rd_ptr_gray_sync2[ADDR_WIDTH-1],rd_ptr_gray_sync2[ADDR_WIDTH-2:0]});
+
+// Empty condition logic
+assign empty = (rd_ptr_gray == wr_ptr_gray_sync2);
+    
 endmodule 
+    
+
